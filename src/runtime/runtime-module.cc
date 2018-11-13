@@ -35,7 +35,8 @@ RUNTIME_FUNCTION(Runtime_GetModuleNamespace) {
   DCHECK_EQ(1, args.length());
   CONVERT_SMI_ARG_CHECKED(module_request, 0);
   Handle<Module> module(isolate->context()->module(), isolate);
-  return *Module::GetModuleNamespace(isolate, module, module_request);
+  RETURN_RESULT_OR_FAILURE(
+      isolate, Module::GetModuleNamespace(isolate, module, module_request));
 }
 
 RUNTIME_FUNCTION(Runtime_GetImportMetaObject) {

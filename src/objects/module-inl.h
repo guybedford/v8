@@ -32,6 +32,7 @@ SMI_ACCESSORS(Module, status, kStatusOffset)
 SMI_ACCESSORS(Module, dfs_index, kDfsIndexOffset)
 SMI_ACCESSORS(Module, dfs_ancestor_index, kDfsAncestorIndexOffset)
 SMI_ACCESSORS(Module, hash, kHashOffset)
+SMI_ACCESSORS(Module, module_type, kModuleTypeOffset)
 
 ModuleInfo Module::info() const {
   return (status() >= kEvaluating)
@@ -41,6 +42,8 @@ ModuleInfo Module::info() const {
 
 CAST_ACCESSOR2(JSModuleNamespace)
 ACCESSORS(JSModuleNamespace, module, Module, kModuleOffset)
+SMI_ACCESSORS(JSModuleNamespace, pending_dynamic_reexports_cnt,
+              kPendingDynamicReexportsCntOffset)
 
 CAST_ACCESSOR(ModuleInfoEntry)
 ACCESSORS(ModuleInfoEntry, export_name, Object, kExportNameOffset)
