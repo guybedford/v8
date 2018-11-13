@@ -1219,6 +1219,18 @@ class V8_EXPORT Module {
 };
 
 /**
+ * A Dynamic JavaScript module
+ */
+class V8_EXPORT DynamicModule : public Module {
+ public:
+  /**
+   * Set an export value, corresponding to an export name
+   */
+  void SetExport(Isolate* isolate, Local<String> export_name,
+                 Local<Value> value);
+};
+
+/**
  * A compiled JavaScript script, tied to a Context which was active when the
  * script was compiled.
  */
@@ -1537,6 +1549,12 @@ class V8_EXPORT ScriptCompiler {
       Isolate* isolate, Source* source,
       CompileOptions options = kNoCompileOptions,
       NoCacheReason no_cache_reason = kNoCacheNoReason);
+
+  /**
+   * Create a new Dynamic Module.
+   */
+  static V8_WARN_UNUSED_RESULT MaybeLocal<DynamicModule> CreateDynamicModule(
+      Isolate* isolate);
 
   /**
    * Compile a function for a given context. This is equivalent to running
@@ -6529,6 +6547,15 @@ typedef void (*BeforeCallEnteredCallback)(Isolate*);
 typedef void (*CallCompletedCallback)(Isolate*);
 
 /**
+ * HostExecuteDynamicModuleCallback is called at the exact point
+ * of execution of a dynamic module in the graph.
+ *
+ * It should call Module::SetExport for each defined export.
+ */
+typedef void (*HostExecuteDynamicModuleCallback)(Local<Context> context,
+                                                 Local<DynamicModule> module);
+
+/**
  * HostImportModuleDynamicallyCallback is called when we require the
  * embedder to load a module. This is used as part of the dynamic
  * import syntax.
@@ -7500,6 +7527,13 @@ class V8_EXPORT Isolate {
   typedef bool (*AbortOnUncaughtExceptionCallback)(Isolate*);
   void SetAbortOnUncaughtExceptionCallback(
       AbortOnUncaughtExceptionCallback callback);
+
+  /*
+   * This specifies the callback called by Dynamic Module records
+   * at their exact point of execution in the module graph.
+   */
+  void SetHostExecuteDynamicModuleCallback(
+      HostExecuteDynamicModuleCallback callback);
 
   /**
    * This specifies the callback called by the upcoming dynamic

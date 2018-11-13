@@ -1536,6 +1536,11 @@ class Isolate final : private HiddenFactory {
   Handle<JSObject> RunHostInitializeImportMetaObjectCallback(
       Handle<Module> module);
 
+  void SetHostExecuteDynamicModuleCallback(
+      HostExecuteDynamicModuleCallback callback);
+  void RunHostExecuteDynamicModuleCallback(Handle<Context>,
+                                           Handle<Module> module);
+
   void SetPrepareStackTraceCallback(PrepareStackTraceCallback callback);
   MaybeHandle<Object> RunPrepareStackTraceCallback(Handle<Context>,
                                                    Handle<JSObject> Error,
@@ -1746,6 +1751,8 @@ class Isolate final : private HiddenFactory {
       nullptr;
   HostInitializeImportMetaObjectCallback
       host_initialize_import_meta_object_callback_ = nullptr;
+  HostExecuteDynamicModuleCallback host_execute_dynamic_module_callback_ =
+      nullptr;
   base::Mutex rail_mutex_;
   double load_start_time_ms_ = 0;
 

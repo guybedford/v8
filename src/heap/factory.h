@@ -660,6 +660,8 @@ class V8_EXPORT_PRIVATE Factory {
 
   Handle<Module> NewModule(Handle<SharedFunctionInfo> code);
 
+  Handle<Module> NewDynamicModule();
+
   Handle<JSArrayBuffer> NewJSArrayBuffer(SharedFlag shared,
                                          PretenureFlag pretenure = NOT_TENURED);
 

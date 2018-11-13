@@ -67,6 +67,10 @@ class Module : public Struct {
     kErrored
   };
 
+  // TODO(neis): Don't store those in the module object?
+  DECL_INT_ACCESSORS(dfs_index)
+  DECL_INT_ACCESSORS(dfs_ancestor_index)
+
   // The exception in the case {status} is kErrored.
   Object* GetException();
 
@@ -89,6 +93,10 @@ class Module : public Struct {
   // Lazily initialized on first access. It's the hole before first access and
   // a JSObject afterwards.
   DECL_ACCESSORS(import_meta, Object)
+
+  // Whether this module represents a dynamic module
+  DECL_INT_ACCESSORS(module_type)
+  enum Type { kSourceTextModule, kDynamicModule };
 
   // Get the ModuleInfo associated with the code.
   inline ModuleInfo info() const;
@@ -114,16 +122,19 @@ class Module : public Struct {
   static int ImportIndex(int cell_index);
   static int ExportIndex(int cell_index);
 
+  static Handle<Cell> CreateDynamicExport(Isolate* isolate,
+                                          Handle<Module> module,
+                                          Handle<String> name);
+
   // Get the namespace object for [module_request] of [module].  If it doesn't
   // exist yet, it is created.
-  static Handle<JSModuleNamespace> GetModuleNamespace(Isolate* isolate,
-                                                      Handle<Module> module,
-                                                      int module_request);
+  static MaybeHandle<JSModuleNamespace> GetModuleNamespace(
+      Isolate* isolate, Handle<Module> module, int module_request);
 
   // Get the namespace object for [module].  If it doesn't exist yet, it is
   // created.
-  static Handle<JSModuleNamespace> GetModuleNamespace(Isolate* isolate,
-                                                      Handle<Module> module);
+  static MaybeHandle<JSModuleNamespace> GetModuleNamespace(
+      Isolate* isolate, Handle<Module> module);
 
 // Layout description.
 #define MODULE_FIELDS(V)                  \
@@ -140,6 +151,7 @@ class Module : public Struct {
   V(kExceptionOffset, kTaggedSize)        \
   V(kScriptOffset, kTaggedSize)           \
   V(kImportMetaOffset, kTaggedSize)       \
+  V(kModuleTypeOffset, kTaggedSize)       \
   /* Total size. */                       \
   V(kSize, 0)
 
@@ -150,18 +162,6 @@ class Module : public Struct {
   friend class Factory;
 
   DECL_ACCESSORS(exception, Object)
-
-  // TODO(neis): Don't store those in the module object?
-  DECL_INT_ACCESSORS(dfs_index)
-  DECL_INT_ACCESSORS(dfs_ancestor_index)
-
-  // Helpers for Instantiate and Evaluate.
-
-  static void CreateExport(Isolate* isolate, Handle<Module> module,
-                           int cell_index, Handle<FixedArray> names);
-  static void CreateIndirectExport(Isolate* isolate, Handle<Module> module,
-                                   Handle<String> name,
-                                   Handle<ModuleInfoEntry> entry);
 
   // The [must_resolve] argument indicates whether or not an exception should be
   // thrown in case the module does not provide an export named [name]
@@ -231,6 +231,7 @@ class JSModuleNamespace : public JSObject {
 
   // The actual module whose namespace is being represented.
   DECL_ACCESSORS2(module, Module)
+  DECL_INT_ACCESSORS(pending_dynamic_reexports_cnt)
 
   // Retrieve the value exported by [module] under the given [name]. If there is
   // no such export, return Just(undefined). If the export is uninitialized,
@@ -253,6 +254,7 @@ class JSModuleNamespace : public JSObject {
 // Layout description.
 #define JS_MODULE_NAMESPACE_FIELDS(V)                        \
   V(kModuleOffset, kTaggedSize)                              \
+  V(kPendingDynamicReexportsCntOffset, kTaggedSize)          \
   /* Header size. */                                         \
   V(kHeaderSize, 0)                                          \
   V(kInObjectFieldsOffset, kTaggedSize* kInObjectFieldCount) \
