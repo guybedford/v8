@@ -2259,7 +2259,7 @@ Local<Value> Module::GetModuleNamespace() {
       "v8::Module::GetModuleNamespace must be used on an instantiated module");
   i::Handle<i::Module> self = Utils::OpenHandle(this);
   i::Handle<i::JSModuleNamespace> module_namespace =
-      i::Module::GetModuleNamespace(self->GetIsolate(), self);
+      i::Module::GetModuleNamespace(self->GetIsolate(), self).ToHandleChecked();
   return ToApiHandle<Value>(module_namespace);
 }
 
@@ -2302,6 +2302,36 @@ MaybeLocal<Value> Module::Evaluate(Local<Context> context) {
   has_pending_exception = !ToLocal(i::Module::Evaluate(isolate, self), &result);
   RETURN_ON_FAILED_EXECUTION(Value);
   RETURN_ESCAPED(result);
+}
+
+void DynamicModule::SetExport(Isolate* v8_isolate, Local<String> export_name,
+                              Local<Value> value) {
+  Utils::ApiCheck(
+      GetStatus() >= kEvaluating, "v8::Module::SetExport",
+      "v8::DynamicModule::SetExport must be used after instantiation");
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
+  i::Handle<i::Module> self = Utils::OpenHandle(this);
+  i::Handle<i::String> name = Utils::OpenHandle(*(export_name));
+  i::Handle<i::Object> object(self->exports()->Lookup(name), isolate);
+
+  i::Handle<i::Object> val = Utils::OpenHandle(*(value));
+
+  // Exports can be defined while executing
+  if (GetStatus() == kEvaluating) {
+    if (!object->IsCell()) {
+      i::Handle<i::String> internal_name =
+          isolate->factory()->InternalizeString(name);
+      auto cell = i::Module::CreateDynamicExport(isolate, self, internal_name);
+      cell->set_value(*val);
+      return;
+    }
+  } else {
+    Utils::ApiCheck(object->IsCell(), "v8::Module::SetExport",
+                    "v8::Module::SetExport unable to find local export name");
+  }
+
+  auto cell = i::Handle<i::Cell>::cast(object);
+  cell->set_value(*val);
 }
 
 namespace {
@@ -2417,6 +2447,12 @@ MaybeLocal<Module> ScriptCompiler::CompileModule(
   return ToApiHandle<Module>(i_isolate->factory()->NewModule(shared));
 }
 
+MaybeLocal<DynamicModule> ScriptCompiler::CreateDynamicModule(
+    Isolate* isolate) {
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+
+  return ToApiHandle<DynamicModule>(i_isolate->factory()->NewDynamicModule());
+}
 
 class IsIdentifierHelper {
  public:
@@ -8304,6 +8340,12 @@ void Isolate::SetAbortOnUncaughtExceptionCallback(
     AbortOnUncaughtExceptionCallback callback) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   isolate->SetAbortOnUncaughtExceptionCallback(callback);
+}
+
+void Isolate::SetHostExecuteDynamicModuleCallback(
+    HostExecuteDynamicModuleCallback callback) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  isolate->SetHostExecuteDynamicModuleCallback(callback);
 }
 
 void Isolate::SetHostImportModuleDynamicallyCallback(

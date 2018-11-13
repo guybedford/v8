@@ -114,29 +114,22 @@ int Module::ImportIndex(int cell_index) {
   return -cell_index - 1;
 }
 
-void Module::CreateIndirectExport(Isolate* isolate, Handle<Module> module,
-                                  Handle<String> name,
-                                  Handle<ModuleInfoEntry> entry) {
+Handle<Cell> Module::CreateDynamicExport(Isolate* isolate,
+                                         Handle<Module> module,
+                                         Handle<String> name) {
+  DCHECK_EQ(module->module_type(), kDynamicModule);
+  Handle<ArrayList> regular_exports =
+      handle(ArrayList::cast(module->regular_exports()), isolate);
+  Handle<Cell> cell =
+      isolate->factory()->NewCell(isolate->factory()->the_hole_value());
+  regular_exports = ArrayList::Add(isolate, regular_exports, cell);
+  module->set_regular_exports(*regular_exports);
+
   Handle<ObjectHashTable> exports(module->exports(), isolate);
   DCHECK(exports->Lookup(name)->IsTheHole(isolate));
-  exports = ObjectHashTable::Put(exports, name, entry);
+  exports = ObjectHashTable::Put(exports, name, cell);
   module->set_exports(*exports);
-}
-
-void Module::CreateExport(Isolate* isolate, Handle<Module> module,
-                          int cell_index, Handle<FixedArray> names) {
-  DCHECK_LT(0, names->length());
-  Handle<Cell> cell =
-      isolate->factory()->NewCell(isolate->factory()->undefined_value());
-  module->regular_exports()->set(ExportIndex(cell_index), *cell);
-
-  Handle<ObjectHashTable> exports(module->exports(), isolate);
-  for (int i = 0, n = names->length(); i < n; ++i) {
-    Handle<String> name(String::cast(names->get(i)), isolate);
-    DCHECK(exports->Lookup(name)->IsTheHole(isolate));
-    exports = ObjectHashTable::Put(exports, name, cell);
-  }
-  module->set_exports(*exports);
+  return cell;
 }
 
 Cell* Module::GetCell(int cell_index) {
@@ -174,7 +167,11 @@ void Module::PrintStatusTransition(Status new_status) {
     StdoutStream os;
     os << "Changing module status from " << status() << " to " << new_status
        << " for ";
-    script()->GetNameOrSourceURL()->Print(os);
+    if (module_type() == kDynamicModule) {
+      os << "[dynamic]\n";
+    } else {
+      script()->GetNameOrSourceURL()->Print(os);
+    }
 #ifndef OBJECT_PRINT
     os << "\n";
 #endif  // OBJECT_PRINT
@@ -250,7 +247,7 @@ void Module::RecordError(Isolate* isolate) {
   Object* the_exception = isolate->pending_exception();
   DCHECK(!the_exception->IsTheHole(isolate));
 
-  set_code(info());
+  if (module_type() != kDynamicModule) set_code(info());
 #ifdef DEBUG
   PrintStatusTransition(Module::kErrored);
 #endif  // DEBUG
@@ -269,6 +266,7 @@ SharedFunctionInfo Module::GetSharedFunctionInfo() const {
   DisallowHeapAllocation no_alloc;
   DCHECK_NE(status(), Module::kEvaluating);
   DCHECK_NE(status(), Module::kEvaluated);
+  DCHECK_NE(module_type(), Module::kDynamicModule);
   switch (status()) {
     case kUninstantiated:
     case kPreInstantiating:
@@ -318,6 +316,17 @@ MaybeHandle<Cell> Module::ResolveExport(Isolate* isolate, Handle<Module> module,
     return Handle<Cell>::cast(object);
   }
 
+  // Dynamic modules allocate export cells as they are resolved.
+  if (module->module_type() == kDynamicModule) {
+    if (module->status() == kEvaluated) {
+      return isolate->Throw<Cell>(isolate->factory()->NewSyntaxError(
+                                      MessageTemplate::kUnresolvableExport,
+                                      module_specifier, export_name),
+                                  &loc);
+    }
+    return CreateDynamicExport(isolate, module, export_name);
+  }
+
   // Check for cycle before recursing.
   {
     // Attempt insertion with a null string set.
@@ -346,6 +355,7 @@ MaybeHandle<Cell> Module::ResolveExport(Isolate* isolate, Handle<Module> module,
     // Not yet resolved indirect export.
     Handle<ModuleInfoEntry> entry = Handle<ModuleInfoEntry>::cast(object);
     Handle<String> import_name(String::cast(entry->import_name()), isolate);
+
     Handle<Script> script(module->script(), isolate);
     MessageLocation new_loc(script, entry->beg_pos(), entry->end_pos());
 
@@ -436,13 +446,16 @@ bool Module::Instantiate(Isolate* isolate, Handle<Module> module,
   if (FLAG_trace_module_status) {
     StdoutStream os;
     os << "Instantiating module ";
-    module->script()->GetNameOrSourceURL()->Print(os);
+    if (module->module_type() == kDynamicModule) {
+      os << "[dynamic]\n";
+    } else {
+      module->script()->GetNameOrSourceURL()->Print(os);
+    }
 #ifndef OBJECT_PRINT
     os << "\n";
 #endif  // OBJECT_PRINT
   }
 #endif  // DEBUG
-
   if (!PrepareInstantiate(isolate, module, context, callback)) {
     ResetGraph(isolate, module);
     return false;
@@ -472,6 +485,10 @@ bool Module::PrepareInstantiate(Isolate* isolate, Handle<Module> module,
   module->SetStatus(kPreInstantiating);
   STACK_CHECK(isolate, false);
 
+  if (module->module_type() == kDynamicModule) {
+    return true;
+  }
+
   // Obtain requested modules.
   Handle<ModuleInfo> module_info(module->info(), isolate);
   Handle<FixedArray> module_requests(module_info->module_requests(), isolate);
@@ -499,12 +516,21 @@ bool Module::PrepareInstantiate(Isolate* isolate, Handle<Module> module,
   }
 
   // Set up local exports.
-  // TODO(neis): Create regular_exports array here instead of in factory method?
   for (int i = 0, n = module_info->RegularExportCount(); i < n; ++i) {
     int cell_index = module_info->RegularExportCellIndex(i);
     Handle<FixedArray> export_names(module_info->RegularExportExportNames(i),
                                     isolate);
-    CreateExport(isolate, module, cell_index, export_names);
+    Handle<Cell> cell =
+        isolate->factory()->NewCell(isolate->factory()->undefined_value());
+    module->regular_exports()->set(ExportIndex(cell_index), *cell);
+
+    Handle<ObjectHashTable> exports(module->exports(), isolate);
+    for (int i = 0, n = export_names->length(); i < n; ++i) {
+      Handle<String> name(String::cast(export_names->get(i)), isolate);
+      DCHECK(exports->Lookup(name)->IsTheHole(isolate));
+      exports = ObjectHashTable::Put(exports, name, cell);
+    }
+    module->set_exports(*exports);
   }
 
   // Partially set up indirect exports.
@@ -518,8 +544,12 @@ bool Module::PrepareInstantiate(Isolate* isolate, Handle<Module> module,
         ModuleInfoEntry::cast(special_exports->get(i)), isolate);
     Handle<Object> export_name(entry->export_name(), isolate);
     if (export_name->IsUndefined(isolate)) continue;  // Star export.
-    CreateIndirectExport(isolate, module, Handle<String>::cast(export_name),
-                         entry);
+
+    Handle<ObjectHashTable> exports(module->exports(), isolate);
+    Handle<String> name = Handle<String>::cast(export_name);
+    DCHECK(exports->Lookup(name)->IsTheHole(isolate));
+    exports = ObjectHashTable::Put(exports, name, entry);
+    module->set_exports(*exports);
   }
 
   DCHECK_EQ(module->status(), kPreInstantiating);
@@ -555,16 +585,21 @@ bool Module::MaybeTransitionComponent(Isolate* isolate, Handle<Module> module,
   DCHECK_LE(module->dfs_ancestor_index(), module->dfs_index());
   if (module->dfs_ancestor_index() == module->dfs_index()) {
     // This is the root of its strongly connected component.
+    // Attempt to transition together.
     Handle<Module> ancestor;
-    do {
-      ancestor = stack->front();
-      stack->pop_front();
+    for (auto& ancestor : *stack) {
       DCHECK_EQ(ancestor->status(),
                 new_status == kInstantiated ? kInstantiating : kEvaluating);
       if (new_status == kInstantiated) {
         if (!RunInitializationCode(isolate, ancestor)) return false;
       }
       ancestor->SetStatus(new_status);
+      if (*ancestor == *module) break;
+    }
+    // On success, clear the stack.
+    do {
+      ancestor = stack->front();
+      stack->pop_front();
     } while (*ancestor != *module);
   }
   return true;
@@ -577,6 +612,11 @@ bool Module::FinishInstantiate(Isolate* isolate, Handle<Module> module,
   if (module->status() >= kInstantiating) return true;
   DCHECK_EQ(module->status(), kPreInstantiating);
   STACK_CHECK(isolate, false);
+
+  if (module->module_type() == kDynamicModule) {
+    module->SetStatus(Module::kInstantiated);
+    return true;
+  }
 
   // Instantiate SharedFunctionInfo and mark module as instantiating for
   // the recursion.
@@ -656,12 +696,187 @@ bool Module::FinishInstantiate(Isolate* isolate, Handle<Module> module,
   return MaybeTransitionComponent(isolate, module, stack, kInstantiated);
 }
 
+namespace {
+
+bool FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
+                      UnorderedModuleSet* visited,
+                      Handle<JSModuleNamespace> ns) {
+  DCHECK_GE(module->status(), Module::kInstantiating);
+
+  // Track star exports from unexecuted dynamic modules
+  // as these will be amended on dynamic module execution completion.
+  if (module->module_type() == Module::kDynamicModule) {
+    int status = module->status();
+
+    if (status >= Module::kEvaluated) return false;
+
+    Handle<ArrayList> dynamic_namespaces =
+        handle(ArrayList::cast(module->regular_imports()), isolate);
+    dynamic_namespaces = ArrayList::Add(isolate, dynamic_namespaces, ns);
+    module->set_regular_imports(*dynamic_namespaces);
+    int pending_dynamic_reexports_cnt = ns->pending_dynamic_reexports_cnt();
+    ns->set_pending_dynamic_reexports_cnt(pending_dynamic_reexports_cnt + 1);
+    return true;
+  }
+
+  // Shortcut.
+  HeapObject* cur_ns = module->module_namespace();
+  if (cur_ns->IsJSModuleNamespace() &&
+      JSModuleNamespace::cast(cur_ns)->pending_dynamic_reexports_cnt() == -1) {
+    return false;
+  }
+
+  bool cycle = !visited->insert(module).second;
+  if (cycle) return false;
+  Handle<ObjectHashTable> exports(module->exports(), isolate);
+  UnorderedStringMap more_exports(zone);
+
+  // TODO(neis): Only allocate more_exports if there are star exports.
+  // Maybe split special_exports into indirect_exports and star_exports.
+
+  ReadOnlyRoots roots(isolate);
+  Handle<FixedArray> special_exports(module->info()->special_exports(),
+                                     isolate);
+  for (int i = 0, n = special_exports->length(); i < n; ++i) {
+    Handle<ModuleInfoEntry> entry(
+        ModuleInfoEntry::cast(special_exports->get(i)), isolate);
+    if (!entry->export_name()->IsUndefined(roots)) {
+      continue;  // Indirect export.
+    }
+
+    Handle<Module> requested_module(
+        Module::cast(module->requested_modules()->get(entry->module_request())),
+        isolate);
+
+    // Recurse, stopping if we hit a pending dynamic reexport.
+    if (FetchStarExports(isolate, requested_module, zone, visited, ns)) {
+      return true;
+    }
+
+    // Collect all of [requested_module]'s exports that must be added to
+    // [module]'s exports (i.e. to [exports]).  We record these in
+    // [more_exports].  Ambiguities (conflicting exports) are marked by mapping
+    // the name to undefined instead of a Cell.
+    Handle<ObjectHashTable> requested_exports(requested_module->exports(),
+                                              isolate);
+    for (int i = 0, n = requested_exports->Capacity(); i < n; ++i) {
+      Object* key;
+      if (!requested_exports->ToKey(roots, i, &key)) continue;
+      Handle<String> name(String::cast(key), isolate);
+
+      if (name->Equals(roots.default_string())) continue;
+      if (!exports->Lookup(name)->IsTheHole(roots)) continue;
+
+      Handle<Cell> cell(Cell::cast(requested_exports->ValueAt(i)), isolate);
+      auto insert_result = more_exports.insert(std::make_pair(name, cell));
+      if (!insert_result.second) {
+        auto it = insert_result.first;
+        if (*it->second == *cell || it->second->IsUndefined(roots)) {
+          // We already recorded this mapping before, or the name is already
+          // known to be ambiguous.  In either case, there's nothing to do.
+        } else {
+          DCHECK(it->second->IsCell());
+          // Different star exports provide different cells for this name, hence
+          // mark the name as ambiguous.
+          it->second = roots.undefined_value_handle();
+        }
+      }
+    }
+  }
+
+  // Copy [more_exports] into [exports].
+  for (const auto& elem : more_exports) {
+    if (elem.second->IsUndefined(isolate)) continue;  // Ambiguous export.
+    DCHECK(!elem.first->Equals(ReadOnlyRoots(isolate).default_string()));
+    DCHECK(elem.second->IsCell());
+    exports = ObjectHashTable::Put(exports, elem.first, elem.second);
+  }
+  module->set_exports(*exports);
+  return false;
+}
+
+void FinalizeModuleNamespace(Isolate* isolate, Handle<Module> module,
+                             Handle<JSModuleNamespace> ns) {
+  Zone zone(isolate->allocator(), ZONE_NAME);
+  UnorderedModuleSet visited(&zone);
+
+  // FetchStarExports returns true for pending dynamic module star reexports.
+  if (FetchStarExports(isolate, module, &zone, &visited, ns)) return;
+
+#ifdef DEBUG
+  if (FLAG_trace_module_status) {
+    StdoutStream os;
+    os << "Finalizing module namespace ";
+    if (module->module_type() == Module::kDynamicModule) {
+      os << "[dynamic]\n";
+    } else {
+      module->script()->GetNameOrSourceURL()->Print(os);
+    }
+#ifndef OBJECT_PRINT
+    os << "\n";
+#endif  // OBJECT_PRINT
+  }
+#endif  // DEBU
+
+  // Collect the export names.
+  ReadOnlyRoots roots(isolate);
+  Handle<ObjectHashTable> exports(module->exports(), isolate);
+  ZoneVector<Handle<String>> names(&zone);
+  names.reserve(exports->NumberOfElements());
+  for (int i = 0, n = exports->Capacity(); i < n; ++i) {
+    Object* key;
+    if (!exports->ToKey(roots, i, &key)) continue;
+    Handle<Cell> cell(Cell::cast(exports->ValueAt(i)), isolate);
+    Handle<String> name = handle(String::cast(key), isolate);
+    names.push_back(name);
+  }
+  DCHECK_EQ(static_cast<int>(names.size()), exports->NumberOfElements());
+
+  // Sort them alphabetically.
+  std::sort(names.begin(), names.end(),
+            [&isolate](Handle<String> a, Handle<String> b) {
+              return String::Compare(isolate, a, b) ==
+                     ComparisonResult::kLessThan;
+            });
+
+  // Create the properties in the namespace object. Transition the object
+  // to dictionary mode so that property addition is faster.
+  PropertyAttributes attr = DONT_DELETE;
+  JSObject::NormalizeProperties(ns, CLEAR_INOBJECT_PROPERTIES,
+                                static_cast<int>(names.size()),
+                                "JSModuleNamespace");
+  for (const auto& name : names) {
+    JSObject::SetNormalizedProperty(
+        ns, name, Accessors::MakeModuleNamespaceEntryInfo(isolate, name),
+        PropertyDetails(kAccessor, attr, PropertyCellType::kMutable));
+  }
+
+  // Optimize the namespace object as a prototype, for two reasons:
+  // - The object's map is guaranteed not to be shared. ICs rely on this.
+  // - We can store a pointer from the map back to the namespace object.
+  //   Turbofan can use this for inlining the access.
+  JSObject::OptimizeAsPrototype(ns);
+
+  Handle<PrototypeInfo> proto_info =
+      Map::GetOrCreatePrototypeInfo(Handle<JSObject>::cast(ns), isolate);
+  proto_info->set_module_namespace(*ns);
+
+  // Indicates completion for shortcut path.
+  ns->set_pending_dynamic_reexports_cnt(-1);
+}
+
+}  // anonymous namespace
+
 MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module) {
 #ifdef DEBUG
   if (FLAG_trace_module_status) {
     StdoutStream os;
     os << "Evaluating module ";
-    module->script()->GetNameOrSourceURL()->Print(os);
+    if (module->module_type() == kDynamicModule) {
+      os << "[dynamic]\n";
+    } else {
+      module->script()->GetNameOrSourceURL()->Print(os);
+    }
 #ifndef OBJECT_PRINT
     os << "\n";
 #endif  // OBJECT_PRINT
@@ -704,10 +919,57 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
   DCHECK_EQ(module->status(), kInstantiated);
   STACK_CHECK(isolate, MaybeHandle<Object>());
 
+  if (module->module_type() == kDynamicModule) {
+    ReadOnlyRoots roots(isolate);
+    module->SetStatus(kEvaluating);
+    isolate->RunHostExecuteDynamicModuleCallback(
+        handle(isolate->context(), isolate), module);
+    // Ensure that all exports are defined.
+    ObjectHashTable* exports = module->exports();
+    for (int i = 0, n = exports->Capacity(); i < n; ++i) {
+      Object* key;
+      if (!exports->ToKey(roots, i, &key)) continue;
+      Handle<Cell> cell(Cell::cast(exports->ValueAt(i)), isolate);
+      Handle<Object> value(cell->value(), isolate);
+      if (value->IsTheHole()) {
+        Handle<String> name = handle(String::cast(key), isolate);
+        isolate->Throw(*isolate->factory()->NewReferenceError(
+            MessageTemplate::kModuleExportUndefined, name));
+        module->RecordError(isolate);
+        return MaybeHandle<Object>();
+      }
+    }
+
+    // Convert the regular_exports ArrayList into a FixedArray.
+    Handle<ArrayList> regular_exports =
+        handle(ArrayList::cast(module->regular_exports()), isolate);
+    module->set_regular_exports(*ArrayList::Elements(isolate, regular_exports));
+
+    module->SetStatus(kEvaluated);
+
+    Handle<ArrayList> dynamic_namespaces(
+        ArrayList::cast(module->regular_imports()), isolate);
+    for (int i = 0, length = dynamic_namespaces->Length(); i < length; ++i) {
+      Object* object = dynamic_namespaces->Get(i);
+      DCHECK(!object->IsUndefined(roots));
+      Handle<JSModuleNamespace> ns(JSModuleNamespace::cast(object), isolate);
+      int pending_dynamic_reexports_cnt =
+          ns->pending_dynamic_reexports_cnt() - 1;
+      ns->set_pending_dynamic_reexports_cnt(pending_dynamic_reexports_cnt);
+      DCHECK_GE(pending_dynamic_reexports_cnt, 0);
+      if (pending_dynamic_reexports_cnt == 0) {
+        Module* module = ns->module();
+        FinalizeModuleNamespace(isolate, handle(module, isolate), ns);
+      }
+    }
+    return isolate->factory()->undefined_value();
+  }
+
   Handle<JSGeneratorObject> generator(JSGeneratorObject::cast(module->code()),
                                       isolate);
   module->set_code(
       generator->function()->shared()->scope_info()->ModuleDescriptorInfo());
+
   module->SetStatus(kEvaluating);
   module->set_dfs_index(*dfs_index);
   module->set_dfs_ancestor_index(*dfs_index);
@@ -755,92 +1017,16 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
       isolate);
 }
 
-namespace {
-
-void FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
-                      UnorderedModuleSet* visited) {
-  DCHECK_GE(module->status(), Module::kInstantiating);
-
-  if (module->module_namespace()->IsJSModuleNamespace()) return;  // Shortcut.
-
-  bool cycle = !visited->insert(module).second;
-  if (cycle) return;
-  Handle<ObjectHashTable> exports(module->exports(), isolate);
-  UnorderedStringMap more_exports(zone);
-
-  // TODO(neis): Only allocate more_exports if there are star exports.
-  // Maybe split special_exports into indirect_exports and star_exports.
-
-  ReadOnlyRoots roots(isolate);
-  Handle<FixedArray> special_exports(module->info()->special_exports(),
-                                     isolate);
-  for (int i = 0, n = special_exports->length(); i < n; ++i) {
-    Handle<ModuleInfoEntry> entry(
-        ModuleInfoEntry::cast(special_exports->get(i)), isolate);
-    if (!entry->export_name()->IsUndefined(roots)) {
-      continue;  // Indirect export.
-    }
-
-    Handle<Module> requested_module(
-        Module::cast(module->requested_modules()->get(entry->module_request())),
-        isolate);
-
-    // Recurse.
-    FetchStarExports(isolate, requested_module, zone, visited);
-
-    // Collect all of [requested_module]'s exports that must be added to
-    // [module]'s exports (i.e. to [exports]).  We record these in
-    // [more_exports].  Ambiguities (conflicting exports) are marked by mapping
-    // the name to undefined instead of a Cell.
-    Handle<ObjectHashTable> requested_exports(requested_module->exports(),
-                                              isolate);
-    for (int i = 0, n = requested_exports->Capacity(); i < n; ++i) {
-      Object* key;
-      if (!requested_exports->ToKey(roots, i, &key)) continue;
-      Handle<String> name(String::cast(key), isolate);
-
-      if (name->Equals(roots.default_string())) continue;
-      if (!exports->Lookup(name)->IsTheHole(roots)) continue;
-
-      Handle<Cell> cell(Cell::cast(requested_exports->ValueAt(i)), isolate);
-      auto insert_result = more_exports.insert(std::make_pair(name, cell));
-      if (!insert_result.second) {
-        auto it = insert_result.first;
-        if (*it->second == *cell || it->second->IsUndefined(roots)) {
-          // We already recorded this mapping before, or the name is already
-          // known to be ambiguous.  In either case, there's nothing to do.
-        } else {
-          DCHECK(it->second->IsCell());
-          // Different star exports provide different cells for this name, hence
-          // mark the name as ambiguous.
-          it->second = roots.undefined_value_handle();
-        }
-      }
-    }
-  }
-
-  // Copy [more_exports] into [exports].
-  for (const auto& elem : more_exports) {
-    if (elem.second->IsUndefined(isolate)) continue;  // Ambiguous export.
-    DCHECK(!elem.first->Equals(ReadOnlyRoots(isolate).default_string()));
-    DCHECK(elem.second->IsCell());
-    exports = ObjectHashTable::Put(exports, elem.first, elem.second);
-  }
-  module->set_exports(*exports);
-}
-
-}  // anonymous namespace
-
-Handle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
-                                                     Handle<Module> module,
-                                                     int module_request) {
+MaybeHandle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
+                                                          Handle<Module> module,
+                                                          int module_request) {
   Handle<Module> requested_module(
       Module::cast(module->requested_modules()->get(module_request)), isolate);
   return Module::GetModuleNamespace(isolate, requested_module);
 }
 
-Handle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
-                                                     Handle<Module> module) {
+MaybeHandle<JSModuleNamespace> Module::GetModuleNamespace(
+    Isolate* isolate, Handle<Module> module) {
   Handle<HeapObject> object(module->module_namespace(), isolate);
   ReadOnlyRoots roots(isolate);
   if (!object->IsUndefined(roots)) {
@@ -848,54 +1034,17 @@ Handle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
     return Handle<JSModuleNamespace>::cast(object);
   }
 
-  // Collect the export names.
-  Zone zone(isolate->allocator(), ZONE_NAME);
-  UnorderedModuleSet visited(&zone);
-  FetchStarExports(isolate, module, &zone, &visited);
-  Handle<ObjectHashTable> exports(module->exports(), isolate);
-  ZoneVector<Handle<String>> names(&zone);
-  names.reserve(exports->NumberOfElements());
-  for (int i = 0, n = exports->Capacity(); i < n; ++i) {
-    Object* key;
-    if (!exports->ToKey(roots, i, &key)) continue;
-    names.push_back(handle(String::cast(key), isolate));
-  }
-  DCHECK_EQ(static_cast<int>(names.size()), exports->NumberOfElements());
-
-  // Sort them alphabetically.
-  std::sort(names.begin(), names.end(),
-            [&isolate](Handle<String> a, Handle<String> b) {
-              return String::Compare(isolate, a, b) ==
-                     ComparisonResult::kLessThan;
-            });
-
   // Create the namespace object (initially empty).
   Handle<JSModuleNamespace> ns = isolate->factory()->NewJSModuleNamespace();
   ns->set_module(*module);
-  module->set_module_namespace(*ns);
 
-  // Create the properties in the namespace object. Transition the object
-  // to dictionary mode so that property addition is faster.
-  PropertyAttributes attr = DONT_DELETE;
-  JSObject::NormalizeProperties(ns, CLEAR_INOBJECT_PROPERTIES,
-                                static_cast<int>(names.size()),
-                                "JSModuleNamespace");
-  for (const auto& name : names) {
-    JSObject::SetNormalizedProperty(
-        ns, name, Accessors::MakeModuleNamespaceEntryInfo(isolate, name),
-        PropertyDetails(kAccessor, attr, PropertyCellType::kMutable));
-  }
   JSObject::PreventExtensions(ns, kThrowOnError).ToChecked();
 
-  // Optimize the namespace object as a prototype, for two reasons:
-  // - The object's map is guaranteed not to be shared. ICs rely on this.
-  // - We can store a pointer from the map back to the namespace object.
-  //   Turbofan can use this for inlining the access.
-  JSObject::OptimizeAsPrototype(ns);
+  // Throw uninstantiated pending dynamic reexports circular scenario.
+  FinalizeModuleNamespace(isolate, module, ns);
 
-  Handle<PrototypeInfo> proto_info =
-      Map::GetOrCreatePrototypeInfo(Handle<JSObject>::cast(ns), isolate);
-  proto_info->set_module_namespace(*ns);
+  module->set_module_namespace(*ns);
+
   return ns;
 }
 
