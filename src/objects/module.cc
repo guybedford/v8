@@ -925,7 +925,8 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
     isolate->RunHostExecuteDynamicModuleCallback(
         handle(isolate->context(), isolate), module);
     // Ensure that all exports are defined.
-    ObjectHashTable* exports = module->exports();
+    Handle<ObjectHashTable> exports(module->exports(),
+                                              isolate);
     for (int i = 0, n = exports->Capacity(); i < n; ++i) {
       Object* key;
       if (!exports->ToKey(roots, i, &key)) continue;
