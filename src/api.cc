@@ -2274,7 +2274,7 @@ Local<Value> Module::GetModuleNamespace() {
       "v8::Module::GetModuleNamespace must be used on an instantiated module");
   i::Handle<i::Module> self = Utils::OpenHandle(this);
   i::Handle<i::JSModuleNamespace> module_namespace =
-      i::Module::GetModuleNamespace(self->GetIsolate(), self).ToHandleChecked();
+      i::Module::GetModuleNamespace(self->GetIsolate(), self);
   return ToApiHandle<Value>(module_namespace);
 }
 

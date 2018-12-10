@@ -618,6 +618,37 @@ TEST(DynamicModuleNamespaces) {
   CHECK(!try_catch.HasCaught());
 }
 
+TEST(DynamicStarExportsFail) {
+  Isolate* isolate = CcTest::isolate();
+  HandleScope scope(isolate);
+  LocalContext env;
+  v8::TryCatch try_catch(isolate);
+
+  dynamic = ScriptCompiler::CreateDynamicModule(isolate).ToLocalChecked();
+
+  isolate->SetHostExecuteDynamicModuleCallback(
+      HostExecuteDynamicModuleCallback);
+
+  Local<String> source_text = v8_str("export * from 'dynamic'");
+  ScriptOrigin origin = ModuleOrigin(v8_str("dep1.js"), CcTest::isolate());
+  ScriptCompiler::Source source(source_text, origin);
+  dep1 = ScriptCompiler::CompileModule(isolate, &source).ToLocalChecked();
+
+  CHECK_EQ(dep1->GetStatus(), Module::kUninstantiated);
+
+  CHECK(dep1->InstantiateModule(env.local(), ResolveCallbackDynamicModule)
+            .IsNothing());
+
+  CHECK_EQ(dep1->GetStatus(), Module::kErrored);
+  CHECK_EQ(dynamic->GetStatus(), Module::kUninstantiated);
+
+  Local<v8::Object> SyntaxError =
+      CompileRun("SyntaxError")->ToObject(env.local()).ToLocalChecked();
+
+  CHECK(try_catch.HasCaught());
+  CHECK(try_catch.Exception()->InstanceOf(env.local(), SyntaxError).FromJust());
+}
+
 TEST(DynamicUnfinishedModuleNamespaces) {
   Isolate* isolate = CcTest::isolate();
   HandleScope scope(isolate);
@@ -630,8 +661,10 @@ TEST(DynamicUnfinishedModuleNamespaces) {
       HostExecuteDynamicModuleCallback);
 
   {
-    Local<String> source_text =
-        v8_str("import './dep2.js'; export * from 'dynamic'");
+    Local<String> source_text = v8_str(
+        "import './dep2.js';"
+        "import * as X from 'dynamic';"
+        "export function getNS () { return X; }");
     ScriptOrigin origin = ModuleOrigin(v8_str("dep1.js"), CcTest::isolate());
     ScriptCompiler::Source source(source_text, origin);
     dep1 = ScriptCompiler::CompileModule(isolate, &source).ToLocalChecked();
@@ -639,8 +672,9 @@ TEST(DynamicUnfinishedModuleNamespaces) {
 
   {
     Local<String> source_text = v8_str(
-        "import * as X from './dep1.js';"
-        "import { test as _test } from './dep1.js';"
+        "import { getNS } from './dep1.js';"
+        "const X = getNS();"
+        "import { test as _test } from './dep2.js';"
         "export var exists = !!X;"
         "export var test = X.test;"
         "export var toStringTag = X[Symbol.toStringTag];"

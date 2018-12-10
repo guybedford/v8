@@ -486,9 +486,7 @@ bool Module::PrepareInstantiate(Isolate* isolate, Handle<Module> module,
   module->SetStatus(kPreInstantiating);
   STACK_CHECK(isolate, false);
 
-  if (module->module_type() == kDynamicModule) {
-    return true;
-  }
+  if (module->module_type() == kDynamicModule) return true;
 
   // Obtain requested modules.
   Handle<ModuleInfo> module_info(module->info(), isolate);
@@ -544,7 +542,24 @@ bool Module::PrepareInstantiate(Isolate* isolate, Handle<Module> module,
     Handle<ModuleInfoEntry> entry(
         ModuleInfoEntry::cast(special_exports->get(i)), isolate);
     Handle<Object> export_name(entry->export_name(), isolate);
-    if (export_name->IsUndefined(isolate)) continue;  // Star export.
+
+    // Star export.
+    if (export_name->IsUndefined(isolate)) {
+      int module_request = entry->module_request();
+      Handle<Module> requested_module(
+          Module::cast(requested_modules->get(module_request)), isolate);
+      if (requested_module->module_type() == kDynamicModule) {
+        Handle<String> specifier(
+            String::cast(
+                module->info()->module_requests()->get(module_request)),
+            isolate);
+        isolate->Throw(*isolate->factory()->NewSyntaxError(
+            MessageTemplate::kDynamicModuleStarExport, specifier));
+        module->RecordError(isolate);
+        return false;
+      }
+      continue;
+    }
 
     Handle<ObjectHashTable> exports(module->exports(), isolate);
     Handle<String> name = Handle<String>::cast(export_name);
@@ -699,36 +714,17 @@ bool Module::FinishInstantiate(Isolate* isolate, Handle<Module> module,
 
 namespace {
 
-bool FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
-                      UnorderedModuleSet* visited,
-                      Handle<JSModuleNamespace> ns) {
+void FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
+                      UnorderedModuleSet* visited) {
   DCHECK_GE(module->status(), Module::kInstantiating);
 
-  // Track star exports from unexecuted dynamic modules
-  // as these will be amended on dynamic module execution completion.
-  if (module->module_type() == Module::kDynamicModule) {
-    int status = module->status();
-
-    if (status >= Module::kEvaluated) return false;
-
-    Handle<ArrayList> dynamic_namespaces =
-        handle(ArrayList::cast(module->regular_imports()), isolate);
-    dynamic_namespaces = ArrayList::Add(isolate, dynamic_namespaces, ns);
-    module->set_regular_imports(*dynamic_namespaces);
-    int pending_dynamic_reexports_cnt = ns->pending_dynamic_reexports_cnt();
-    ns->set_pending_dynamic_reexports_cnt(pending_dynamic_reexports_cnt + 1);
-    return true;
-  }
+  if (module->module_type() == Module::kDynamicModule) return;
 
   // Shortcut.
-  HeapObject* cur_ns = module->module_namespace();
-  if (cur_ns->IsJSModuleNamespace() &&
-      JSModuleNamespace::cast(cur_ns)->pending_dynamic_reexports_cnt() == -1) {
-    return false;
-  }
+  if (module->module_namespace()->IsJSModuleNamespace()) return;
 
   bool cycle = !visited->insert(module).second;
-  if (cycle) return false;
+  if (cycle) return;
   Handle<ObjectHashTable> exports(module->exports(), isolate);
   UnorderedStringMap more_exports(zone);
 
@@ -749,10 +745,8 @@ bool FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
         Module::cast(module->requested_modules()->get(entry->module_request())),
         isolate);
 
-    // Recurse, stopping if we hit a pending dynamic reexport.
-    if (FetchStarExports(isolate, requested_module, zone, visited, ns)) {
-      return true;
-    }
+    // Recurse.
+    FetchStarExports(isolate, requested_module, zone, visited);
 
     // Collect all of [requested_module]'s exports that must be added to
     // [module]'s exports (i.e. to [exports]).  We record these in
@@ -793,7 +787,6 @@ bool FetchStarExports(Isolate* isolate, Handle<Module> module, Zone* zone,
     exports = ObjectHashTable::Put(exports, elem.first, elem.second);
   }
   module->set_exports(*exports);
-  return false;
 }
 
 void FinalizeModuleNamespace(Isolate* isolate, Handle<Module> module,
@@ -801,8 +794,7 @@ void FinalizeModuleNamespace(Isolate* isolate, Handle<Module> module,
   Zone zone(isolate->allocator(), ZONE_NAME);
   UnorderedModuleSet visited(&zone);
 
-  // FetchStarExports returns true for pending dynamic module star reexports.
-  if (FetchStarExports(isolate, module, &zone, &visited, ns)) return;
+  FetchStarExports(isolate, module, &zone, &visited);
 
 #ifdef DEBUG
   if (FLAG_trace_module_status) {
@@ -861,9 +853,6 @@ void FinalizeModuleNamespace(Isolate* isolate, Handle<Module> module,
   Handle<PrototypeInfo> proto_info =
       Map::GetOrCreatePrototypeInfo(Handle<JSObject>::cast(ns), isolate);
   proto_info->set_module_namespace(*ns);
-
-  // Indicates completion for shortcut path.
-  ns->set_pending_dynamic_reexports_cnt(-1);
 }
 
 }  // anonymous namespace
@@ -926,8 +915,7 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
     isolate->RunHostExecuteDynamicModuleCallback(
         handle(isolate->context(), isolate), module);
     // Ensure that all exports are defined.
-    Handle<ObjectHashTable> exports(module->exports(),
-                                              isolate);
+    Handle<ObjectHashTable> exports(module->exports(), isolate);
     for (int i = 0, n = exports->Capacity(); i < n; ++i) {
       Object* key;
       if (!exports->ToKey(roots, i, &key)) continue;
@@ -949,20 +937,10 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
 
     module->SetStatus(kEvaluated);
 
-    Handle<ArrayList> dynamic_namespaces(
-        ArrayList::cast(module->regular_imports()), isolate);
-    for (int i = 0, length = dynamic_namespaces->Length(); i < length; ++i) {
-      Object* object = dynamic_namespaces->Get(i);
-      DCHECK(!object->IsUndefined(roots));
-      Handle<JSModuleNamespace> ns(JSModuleNamespace::cast(object), isolate);
-      int pending_dynamic_reexports_cnt =
-          ns->pending_dynamic_reexports_cnt() - 1;
-      ns->set_pending_dynamic_reexports_cnt(pending_dynamic_reexports_cnt);
-      DCHECK_GE(pending_dynamic_reexports_cnt, 0);
-      if (pending_dynamic_reexports_cnt == 0) {
-        Module* module = ns->module();
-        FinalizeModuleNamespace(isolate, handle(module, isolate), ns);
-      }
+    Handle<HeapObject> object(module->module_namespace(), isolate);
+    if (object->IsJSModuleNamespace()) {
+      Handle<JSModuleNamespace> ns = Handle<JSModuleNamespace>::cast(object);
+      FinalizeModuleNamespace(isolate, module, ns);
     }
     return isolate->factory()->undefined_value();
   }
@@ -1015,16 +993,16 @@ MaybeHandle<Object> Module::Evaluate(Isolate* isolate, Handle<Module> module,
   return handle(JSIteratorResult::cast(*result)->value(), isolate);
 }
 
-MaybeHandle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
-                                                          Handle<Module> module,
-                                                          int module_request) {
+Handle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
+                                                     Handle<Module> module,
+                                                     int module_request) {
   Handle<Module> requested_module(
       Module::cast(module->requested_modules()->get(module_request)), isolate);
   return Module::GetModuleNamespace(isolate, requested_module);
 }
 
-MaybeHandle<JSModuleNamespace> Module::GetModuleNamespace(
-    Isolate* isolate, Handle<Module> module) {
+Handle<JSModuleNamespace> Module::GetModuleNamespace(Isolate* isolate,
+                                                     Handle<Module> module) {
   Handle<HeapObject> object(module->module_namespace(), isolate);
   ReadOnlyRoots roots(isolate);
   if (!object->IsUndefined(roots)) {
@@ -1038,8 +1016,10 @@ MaybeHandle<JSModuleNamespace> Module::GetModuleNamespace(
 
   JSObject::PreventExtensions(ns, kThrowOnError).ToChecked();
 
-  // Throw uninstantiated pending dynamic reexports circular scenario.
-  FinalizeModuleNamespace(isolate, module, ns);
+  if (module->module_type() != kDynamicModule ||
+      module->status() == kEvaluated) {
+    FinalizeModuleNamespace(isolate, module, ns);
+  }
 
   module->set_module_namespace(*ns);
 

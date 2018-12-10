@@ -3176,7 +3176,6 @@ Handle<JSModuleNamespace> Factory::NewJSModuleNamespace() {
       *map, JSModuleNamespace::kToStringTagFieldIndex);
   module_namespace->FastPropertyAtPut(index,
                                       ReadOnlyRoots(isolate()).Module_string());
-  module_namespace->set_pending_dynamic_reexports_cnt(0);
   return module_namespace;
 }
 
