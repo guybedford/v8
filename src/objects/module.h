@@ -126,12 +126,12 @@ class Module : public Struct, public NeverReadOnlySpaceObject {
 
   // Get the namespace object for [module_request] of [module].  If it doesn't
   // exist yet, it is created.
-  static MaybeHandle<JSModuleNamespace> GetModuleNamespace(
+  static Handle<JSModuleNamespace> GetModuleNamespace(
       Isolate* isolate, Handle<Module> module, int module_request);
 
   // Get the namespace object for [module].  If it doesn't exist yet, it is
   // created.
-  static MaybeHandle<JSModuleNamespace> GetModuleNamespace(
+  static Handle<JSModuleNamespace> GetModuleNamespace(
       Isolate* isolate, Handle<Module> module);
 
 // Layout description.
@@ -229,7 +229,6 @@ class JSModuleNamespace : public JSObject {
 
   // The actual module whose namespace is being represented.
   DECL_ACCESSORS(module, Module)
-  DECL_INT_ACCESSORS(pending_dynamic_reexports_cnt)
 
   // Retrieve the value exported by [module] under the given [name]. If there is
   // no such export, return Just(undefined). If the export is uninitialized,
@@ -252,7 +251,6 @@ class JSModuleNamespace : public JSObject {
 // Layout description.
 #define JS_MODULE_NAMESPACE_FIELDS(V)                        \
   V(kModuleOffset, kTaggedSize)                              \
-  V(kPendingDynamicReexportsCntOffset, kTaggedSize)          \
   /* Header size. */                                         \
   V(kHeaderSize, 0)                                          \
   V(kInObjectFieldsOffset, kTaggedSize* kInObjectFieldCount) \

@@ -42,8 +42,6 @@ ModuleInfo Module::info() const {
 
 CAST_ACCESSOR2(JSModuleNamespace)
 ACCESSORS(JSModuleNamespace, module, Module, kModuleOffset)
-SMI_ACCESSORS(JSModuleNamespace, pending_dynamic_reexports_cnt,
-              kPendingDynamicReexportsCntOffset)
 
 CAST_ACCESSOR(ModuleInfoEntry)
 ACCESSORS(ModuleInfoEntry, export_name, Object, kExportNameOffset)
