@@ -3904,6 +3904,7 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo() {
       NewStruct(STACK_FRAME_INFO_TYPE, AllocationType::kYoung));
   stack_frame_info->set_line_number(0);
   stack_frame_info->set_column_number(0);
+  stack_frame_info->set_script(Script::cast(Smi::kZero));
   stack_frame_info->set_script_id(0);
   stack_frame_info->set_script_name(Smi::kZero);
   stack_frame_info->set_script_name_or_source_url(Smi::kZero);
@@ -3934,6 +3935,8 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo(
   const int column =
       is_wasm ? it.Frame()->GetPosition() + 1 : it.Frame()->GetColumnNumber();
   info->set_column_number(column);
+
+  info->set_script(*it.Frame()->GetScript());
 
   info->set_script_id(it.Frame()->GetScriptId());
   info->set_script_name(*it.Frame()->GetFileName());

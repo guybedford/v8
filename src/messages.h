@@ -90,14 +90,13 @@ class StackFrameBase {
   // Used to signal that the requested field is unknown.
   static const int kNone = -1;
 
+  virtual bool HasScript() const = 0;
+  virtual Handle<Script> GetScript() const = 0;
+
  protected:
   StackFrameBase() = default;
   explicit StackFrameBase(Isolate* isolate) : isolate_(isolate) {}
   Isolate* isolate_;
-
- private:
-  virtual bool HasScript() const = 0;
-  virtual Handle<Script> GetScript() const = 0;
 };
 
 class JSStackFrame : public StackFrameBase {
@@ -131,12 +130,12 @@ class JSStackFrame : public StackFrameBase {
 
   void ToString(IncrementalStringBuilder& builder) override;
 
+  bool HasScript() const override;
+  Handle<Script> GetScript() const override;
+
  private:
   JSStackFrame() = default;
   void FromFrameArray(Isolate* isolate, Handle<FrameArray> array, int frame_ix);
-
-  bool HasScript() const override;
-  Handle<Script> GetScript() const override;
 
   Handle<Object> receiver_;
   Handle<JSFunction> function_;
@@ -180,11 +179,11 @@ class WasmStackFrame : public StackFrameBase {
 
   void ToString(IncrementalStringBuilder& builder) override;
 
- protected:
-  Handle<Object> Null() const;
-
   bool HasScript() const override;
   Handle<Script> GetScript() const override;
+
+ protected:
+  Handle<Object> Null() const;
 
   Handle<WasmInstanceObject> wasm_instance_;
   uint32_t wasm_func_index_;
