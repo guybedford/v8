@@ -2820,8 +2820,12 @@ ScriptOrigin Message::GetScriptOrigin() const {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   ENTER_V8_NO_SCRIPT_NO_EXCEPTION(isolate);
   auto message = i::Handle<i::JSMessageObject>::cast(Utils::OpenHandle(this));
-  i::Handle<i::Script> script(message->script(), isolate);
-  return GetScriptOriginForScript(isolate, script);
+  if (message->script().IsScript()) {
+    i::Handle<i::Script> script(message->script(), isolate);
+    return GetScriptOriginForScript(isolate, script);
+  } else {
+    return v8::ScriptOrigin(Local<Value>());
+  }
 }
 
 

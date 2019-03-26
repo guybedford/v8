@@ -3936,7 +3936,12 @@ Handle<StackFrameInfo> Factory::NewStackFrameInfo(
       is_wasm ? it.Frame()->GetPosition() + 1 : it.Frame()->GetColumnNumber();
   info->set_column_number(column);
 
-  info->set_script(*it.Frame()->GetScript());
+  Handle<Script> script;
+  if (it.Frame()->GetScript().ToHandle(&script)) {
+    info->set_script(*script);
+  } else {
+    info->set_script(Script::cast(Smi::kZero));
+  }
 
   info->set_script_id(it.Frame()->GetScriptId());
   info->set_script_name(*it.Frame()->GetFileName());

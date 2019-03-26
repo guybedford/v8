@@ -16526,13 +16526,14 @@ void AnalyzeStackInNativeCode(const v8::FunctionCallbackInfo<v8::Value>& args) {
     checkStackFrame(origin, "", 10, 1, false, false,
                     stackTrace->GetFrame(isolate, 3));
     // Verify we can read the ScriptOrigin for the frame
-    //v8::ScriptOrigin origin_f =
-    stackTrace->GetFrame(isolate, 0)->GetScriptOrigin();
-    // origin_f.ResourceName();
-    // CHECK_EQ(0, strcmp(*v8::String::Utf8Value(context->GetIsolate(),
+    v8::ScriptOrigin origin_f =
+        stackTrace->GetFrame(isolate, 0)->GetScriptOrigin();
+    Local<Value> name = origin_f.ResourceName();
+    CHECK(!name.IsEmpty());
+    // name->IsString();
+    // CHECK_EQ(0, strcmp(*v8::String::Utf8Value(isolate,
     //                   origin_f.ResourceName()),
     //                   origin));
-    // origin_f.HostDefinedOptions();
     // CHECK(origin_f.HostDefinedOptions()->Get(isolate, 0)->IsSymbol());
   } else if (testGroup == kFunctionName) {
     v8::Local<v8::StackTrace> stackTrace = v8::StackTrace::CurrentStackTrace(

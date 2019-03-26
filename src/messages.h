@@ -90,8 +90,7 @@ class StackFrameBase {
   // Used to signal that the requested field is unknown.
   static const int kNone = -1;
 
-  virtual bool HasScript() const = 0;
-  virtual Handle<Script> GetScript() const = 0;
+  virtual MaybeHandle<Script> GetScript() const = 0;
 
  protected:
   StackFrameBase() = default;
@@ -130,8 +129,7 @@ class JSStackFrame : public StackFrameBase {
 
   void ToString(IncrementalStringBuilder& builder) override;
 
-  bool HasScript() const override;
-  Handle<Script> GetScript() const override;
+  MaybeHandle<Script> GetScript() const override;
 
  private:
   JSStackFrame() = default;
@@ -179,8 +177,7 @@ class WasmStackFrame : public StackFrameBase {
 
   void ToString(IncrementalStringBuilder& builder) override;
 
-  bool HasScript() const override;
-  Handle<Script> GetScript() const override;
+  MaybeHandle<Script> GetScript() const override;
 
  protected:
   Handle<Object> Null() const;
